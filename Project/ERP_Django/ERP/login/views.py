@@ -1,54 +1,18 @@
-""" 
-import jwt
-from datetime import datetime, timedelta
-from django.contrib.auth import authenticate
-from django.contrib.auth import login as auth_login, logout as auth_logout
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
-from .serializers import LoginSerializer
 
-SECRET_KEY = 'your-secret-key'
 
-def generate_jwt_token(user_id, role):
-    payload = {
-        'user_id': user_id,
-        'role': role,
-        'exp': datetime.utcnow() + timedelta(days=1)
-    }
-    return jwt.encode(payload, SECRET_KEY, algorithm='HS256')
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def custom_login(request):
-    serializer = LoginSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-
-    user_id = serializer.validated_data['id']
-    password = serializer.validated_data['password']
-
-    user = authenticate(request, username=user_id, password=password)
-
-    if user is not None:
-        auth_login(request, user)
-        token = generate_jwt_token(user_id=user_id, username=user.username, role='student')
-        return Response({'token': token})
-    else:
-        return Response({'error': 'Invalid credentials'}, status=401)
-
-@api_view(['POST'])
+""" @api_view(['POST'])
 def custom_logout(request):
     auth_logout(request)
-    return Response({'message': 'Logout successful'})
+    return Response({'message': 'Logout successful'}) """
 
- """
+ 
 
 from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from .serializers import *
 from .models import *
-from .emails import send_otp_via_email,generate_jwt_token
+from .emails import send_otp_via_email,generate_jwt_token,send_passwordreset_mail,decode_jwt_token_reset
 
 
 class dataeditor(APIView):
@@ -115,6 +79,10 @@ class register(APIView):
             print(e)
 
 
+
+from django.http import HttpResponse
+from django.middleware.csrf import rotate_token
+
 class VerifyOTP(APIView):
     def post(self,request):
         try:
@@ -139,12 +107,15 @@ class VerifyOTP(APIView):
                         user_ = student
                     user_id=user_.user_id    
                     role=user_.role
-                    
+                    token=generate_jwt_token(user_id=user_id, role=role)
                     user.is_verified=True
                     user.save()
                     user.delete()
-                    return Response({'message': 'OTP verified successfully',
-                                     'token': generate_jwt_token(user_id=user_id, role=role)})
+
+                    #cokkie setting
+                    response = Response({'user_id': user_id, 'otp_sent': True, 'token': token}, status=200)
+                    response.set_cookie('jwt_token', token, httponly=True, secure=True)  # Use secure=True in production with HTTPS
+                    return response
                 else:
                     return Response({'error': 'Invalid OTP'}, status=401)
             return Response({
@@ -157,3 +128,73 @@ class VerifyOTP(APIView):
             print(e)    
 
         
+class PasswordResetRequest(APIView):
+    def post(self, request):
+        try:
+            data = request.data
+            serializers = PasswordResetSerializer(data=data)
+
+            if serializers.is_valid():
+                email = serializers.validated_data.get('email')
+
+                student_user = Student.objects.filter(email=email).first()
+                faculty_user = Faculty.objects.filter(email=email).first()
+
+                if not student_user and not faculty_user:
+                    return Response({'error': 'User not found: unauthorized email'}, status=404)
+
+                # Assuming you have a function to send password reset mail
+                print(email)
+                send_passwordreset_mail(email)
+
+                return Response({'message': 'Password reset link sent to email'})
+
+            return Response({'error': 'Invalid data'}, status=400)
+
+        except Exception as e:
+            print(e)
+            # Handle other exceptions as needed
+            return Response({'error': 'Internal Server Error'}, status=500)    
+        
+
+used_tokens = {}
+#token is sent in url and new password is taken from user        
+class PasswordReset(APIView):
+            def post(self, request,token):
+                 
+                #token= request.query_params.get('token', None)
+        
+                if token is None:
+                    return Response({'error': 'token is required'}, status=400)      # Handle the case where 'email' is not provided
+                
+                # Check if the token has already been used
+                if used_tokens.get(token):
+                    return Response({'error': 'Token has already been used'}, status=400)
+                
+                email=decode_jwt_token_reset(token)
+            
+                if email is None:
+                    return Response({'error': 'Invalid token'}, status=401)
+                student=Student.objects.filter(email=email).first()
+                if student is None:
+                    faculty=Faculty.objects.filter(email=email).first()
+                    if faculty is None:
+                        return Response({'error': 'User not found'}, status=404)
+                    user=faculty
+                else:
+                    user=student
+                
+                serializers = PasswordtakingSerializer(data=request.data)
+                if serializers.is_valid():
+                    password= serializers.validated_data.get('password')
+                    confirm_password= serializers.validated_data.get('confirm_password')
+
+                    if password != confirm_password:
+                        return Response({'error': 'Passwords do not match'}, status=400)
+                    user.password=password
+                    user.save()
+                    used_tokens[token] = True
+                    
+                    return Response({'message': 'Password reset successful'})
+                else:
+                    return Response(serializers.errors,status=400)    

@@ -21,3 +21,11 @@ class dataeditorserializer(serializers.ModelSerializer):
 class VerifyOTPSerializer(serializers.Serializer):
     otp = serializers.IntegerField()
     email = serializers.EmailField()
+
+class PasswordResetSerializer(serializers.Serializer):
+    email = serializers.EmailField()    
+
+
+class PasswordtakingSerializer(serializers.Serializer):
+    password=serializers.CharField(write_only=True)
+    confirm_password=serializers.CharField(write_only=True)
